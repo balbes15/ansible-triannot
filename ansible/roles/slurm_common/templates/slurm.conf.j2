@@ -64,6 +64,6 @@ ControlAddr={{ master_name }}.oscarlocal
 AccountingStorageHost={{ master_name }}.oscarlocal
 
 # COMPUTE NODES
-NodeName={{ node_prefix }}[0-{{ node_max }}] RealMemory={{ node_ram_mb }} Sockets={{ node_sockets }} CoresPerSocket=2 ThreadsPerCore=1 State=FUTURE
+NodeName={{ node_prefix }-compute}[0-{{ node_max }}] RealMemory={{ node_ram_mb }} Sockets={{ node_sockets }} CoresPerSocket=2 ThreadsPerCore=1 State=FUTURE
 PartitionName=normal Nodes={{ node_prefix }}[0-{{ node_max }}] Default=YES DefMemPerCPU=3000 MaxTime=30-0 State=UP
 
