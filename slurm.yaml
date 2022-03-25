@@ -1,0 +1,320 @@
+heat_template_version: 2013-05-23
+
+description: Template that installs a cluster of slurm servers.
+
+parameters:
+  count:
+    description: Number of slurm nodes
+    type: number
+    default: 3
+
+  key_name:
+    type: string
+    description: Name of key-pair to be used
+    constraints:
+      - custom_constraint: nova.keypair
+
+  flavor_master:
+    type: string
+    default: m1.small
+    description: |
+      Choose an instance flavor for master
+    constraints:
+      - custom_constraint: nova.flavor
+
+  flavor_node:
+    type: string
+    default: m1.small
+    description: |
+      Choose an instance flavor for node
+    constraints:
+      - custom_constraint: nova.flavor
+  
+  image_id:
+    type: string
+    label: Server image
+    default: centos-7-20220127
+    constraints:
+      - allowed_pattern: "[-a-zA-Z_0-9]*cent[oO][sS][-a-zA-Z_0-9]*"
+
+  image_default_login:
+    type: string
+    default: centos
+    label: Image default login
+  
+  #master_volume_size:
+  #  type: integer
+  #  default: 0
+  #  label: Master volume size
+  
+  master_data_volume_size:
+    type: number
+    default: 400
+    label: Master data volume size GB
+  
+  master_data_volume_type:
+    type: string
+    constraints:
+      - allowed_values: ["ceph-ssd", "standard"]
+
+resources:
+  my_slurm_key:
+    properties:
+      name: my_slurm_key
+      save_private_key: true
+    type: OS::Nova::KeyPair
+
+  #master_volume:
+  #  type: OS::Cinder::Volume
+  #    properties:
+  #      size: { get_param: master_volume_size }
+  
+  master_data_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: master_data_volume_size }
+      volume_type: { get_param: master_data_volume_type }
+
+  #node_volume:
+  #  type: OS::Cinder::Volume
+  #    properties:
+  #      size: { get_param: node_volume_size }
+
+  slurm_net:
+    type: OS::Neutron::Net
+    properties:
+      name: triannot-network-public-01
+
+  slurm_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name: triannot-subnet-public-01
+      network_id: { get_resource: slurm_net }
+      cidr: 10.45.5.0/24
+      gateway_ip: 10.45.5.1
+      allocation_pools:
+        - {end: 10.45.5.54,start: 10.45.5.2}
+      enable_dhcp: true
+
+  slurm_router:
+    type: OS::Neutron::Router
+    properties:
+      name: triannot-router-public-01
+      external_gateway_info:
+        network: provider-public-uca1
+        
+  slurm_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: slurm_router }
+      subnet_id: { get_resource: slurm_subnet }
+
+  slurm_master_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: triannot-master-security-group-01
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 22
+          port_range_max: 22
+
+  slurm_node_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: triannot-node-security-group-01
+      rules:
+        - protocol: tcp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 1
+          port_range_max: 65535
+        - protocol: udp
+          remote_ip_prefix: 0.0.0.0/0
+          port_range_min: 1
+          port_range_max: 65535
+  
+  slurm_master_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: slurm_net }
+      security_groups:
+        - default
+        - { get_resource: slurm_master_security_group }
+  
+  slurm_node_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: slurm_net }
+      security_groups:
+        - default
+        - { get_resource: slurm_node_security_group }
+  
+  slurm_cluster:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: count}
+      resource_def:
+        type: OS::Nova::Server
+        properties:
+          image: { get_param: image_id }
+          flavor: { get_param: flavor_node }
+          key_name: { get_param: key_name }
+          networks:
+            - port: { get_resource: slurm_node_port }
+          user_data_format: RAW
+          user_data:
+            str_replace:
+              params:
+                __public_key__: { get_attr: [ my_slurm_key, public_key ]  }
+                __private_key__: { get_attr: [ my_slurm_key, private_key ] }
+                __default_login__: { get_param: image_default_login}
+              template: |
+                #!/bin/bash
+                DEFAULT_LOGIN_HOME=/home/"__default_login__"
+                echo "__public_key__" >> /home/"__default_login__"/.ssh/authorized_keys
+                echo "__private_key__" >> /home/"__default_login__"/.ssh/id_rsa
+                node_vcpus=$(cat /proc/cpuinfo | grep -i "^processor" | wc -l)
+                node_sockets=$(echo "$node_vcpus/2" | bc)
+                node_ram_kb=$(cat /proc/meminfo | grep -i "^MemTotal" | awk -F" " '{print $2}')
+                node_ram_mb_real=$(echo "$node_ram_kb/1024" | bc)
+                node_ram_mb=$(echo "1000*($node_ram_mb_real/1024-1)" | bc)
+
+                printf "node_ram_mb: %s\n" $node_ram_mb >> $DEFAULT_LOGIN_HOME/var.yml
+                printf "node_sockets: %s\n" $node_sockets >> $DEFAULT_LOGIN_HOME/var.yml
+
+          name:
+            str_replace:
+              template:
+                $name-$index
+              params:
+                $name: { get_param: "OS::stack_name" }
+                $index: "compute%index%"
+
+  slurm_master:
+    type: OS::Nova::Server
+    depends_on: slurm_cluster
+    depends_on: slurm_master_port
+    properties:
+      image: { get_param: image_id }
+      flavor: { get_param: flavor_master }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: slurm_master_port }
+      #metadata:
+      #  servers: { get_attr: [slurm_cluster, node_param] }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __private_key__: { get_attr: [ my_slurm_key, private_key ]  }
+            __public_key__: { get_attr: [ my_slurm_key,  public_key] }
+            __prefix__: { get_param: "OS::stack_name" }
+            __count__: {get_param: count}
+            __default_login__: { get_param: image_default_login}
+          template: |
+            #!/bin/bash
+            DEFAULT_LOGIN_HOME=/home/"__default_login__"
+            touch $DEFAULT_LOGIN_HOME/logs.txt
+            LOGS=$DEFAULT_LOGIN_HOME/logs.txt
+
+            echo "__public_key__" >>$DEFAULT_LOGIN_HOME/.ssh/authorized_keys
+            echo "__private_key__" >> $DEFAULT_LOGIN_HOME/.ssh/id_rsa
+            chown "__default_login__":"__default_login__" $DEFAULT_LOGIN_HOME/.ssh/id_rsa
+            chmod 600 $DEFAULT_LOGIN_HOME/.ssh/id_rsa
+            cd $DEFAULT_LOGIN_HOME
+
+            if [ -b /dev/sdb ]; then
+              mkfs.xfs /dev/sdb >> $LOGS
+            fi
+
+            echo "ansible git" >> $LOGS
+            git clone https://github.com/balbes15/ansible-triannot.git
+            echo "ansible git done" >> $LOGS
+            
+            cd ansible-triannot/ansible
+            chown -R centos:centos $DEFAULT_LOGIN_HOME/ansible-triannot
+            pwd >> $LOGS
+            rm ./group_vars/all/slurm.yml
+            ls ./group_vars/all/ >> $LOGS
+
+            HOST_="__prefix__"
+            _HOST="-compute0"
+            HOST="$HOST_$_HOST"
+            PORT=22
+
+            RESULT=1      # 0 upon success
+            TIMEOUT=30    # number of iterations (5 minutes?)
+            while :; do 
+              status=$(sudo -u "__default_login__" ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no $HOST -p $PORT echo ok 2>&1)
+              RESULT=$?
+              echo $status >> $LOGS
+              echo $RESULT >> $LOGS
+              if [ $RESULT -eq 0 ]; then
+                  echo "Connected ok" >> $LOGS
+                  break
+              fi
+              if [ $RESULT -eq 255 ]; then
+                  # connection refused also gets you here
+                  if [[ $status == *"Permission"* ]] ; then
+                      # permission denied indicates the ssh link is okay
+                      break
+                  fi
+              fi
+              TIMEOUT=$((TIMEOUT-1))
+              if [ $TIMEOUT -eq 0 ]; then
+                  echo "Timed out" >> $LOGS
+                  exit 1 
+              fi
+              sleep 10s
+            done
+
+            sudo -u "__default_login__" scp -oStrictHostKeyChecking=no "__default_login__"@$HOST:$DEFAULT_LOGIN_HOME/var.yml ./group_vars/all/slurm.yml >> $LOGS
+            echo node_prefix: __prefix__ >> ./group_vars/all/slurm.yml
+            echo master_name: "__prefix__"-master >> ./group_vars/all/slurm.yml
+            echo node_max: "__count__" >> ./group_vars/all/slurm.yml
+
+            cat <<EOF1 > hosts.ini
+            [MASTER]
+            __prefix__-master ansible_connection=local
+
+            [NODES]
+            EOF1
+            node_prefix=$(printf "%s-compute" "__prefix__")
+            for i in $(eval echo {0.."__count__"})
+            do
+              node_name=$(printf "%s%d" $node_prefix $i)
+              echo "$node_name" >> hosts.ini
+            done
+
+            export ANSIBLE_HOST_KEY_CHECKING=False
+            sudo -u "__default_login__" ansible-playbook -i hosts.ini deploy.yml >> $LOGS
+      name: 
+        str_replace:
+          template:
+            $name-master
+          params:
+            $name: { get_param: "OS::stack_name" }
+
+  volume_att:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      instance_uuid: { get_resource: slurm_master }
+      volume_id: { get_resource: master_data_volume }
+      mountpoint: /dev/sdb
+
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: provider-public-uca1
+  
+  floating_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    depends_on: slurm_master
+    properties:
+      floatingip_id: { get_resource: floating_ip }
+      port_id: { get_resource: slurm_master_port }
+  
+outputs:
+    public_ip:
+      description: The public IP address of this slurm cluster.
+      value: { get_attr: [slurm_master, addresses] }
