@@ -142,15 +142,27 @@ resources:
         - { get_resource: slurm_master_security_group }
   
   slurm_node_port:
-    type: OS::Neutron::Port
+    type: OS::Heat::ResourceGroup
     properties:
-      network_id: { get_resource: slurm_net }
-      security_groups:
-        - default
-        - { get_resource: slurm_node_security_group }
+      count:  {get_param: count}
+      resource_def:
+        type: OS::Neutron::Port
+        properties:
+          network_id: { get_resource: slurm_net }
+          security_groups:
+            - default
+            - { get_resource: slurm_node_security_group }
+          name:
+            str_replace:
+                  template:
+                    $name-$index
+                  params:
+                    $name: slurm_node_port
+                    $index: "%index%"
   
   slurm_cluster:
     type: OS::Heat::ResourceGroup
+    depends_on: slurm_node_port
     properties:
       count: { get_param: count}
       resource_def:
@@ -160,7 +172,13 @@ resources:
           flavor: { get_param: flavor_node }
           key_name: { get_param: key_name }
           networks:
-            - port: { get_resource: slurm_node_port }
+            - port: #{ get_resource: slurm_node_port }
+                str_replace:
+                  template:
+                    $name-$index
+                  params:
+                    $name: slurm_node_port
+                    $index: "%index%"
           user_data_format: RAW
           user_data:
             str_replace:
@@ -200,8 +218,6 @@ resources:
       key_name: { get_param: key_name }
       networks:
         - port: { get_resource: slurm_master_port }
-      #metadata:
-      #  servers: { get_attr: [slurm_cluster, node_param] }
       user_data_format: RAW
       user_data:
         str_replace:
@@ -213,9 +229,46 @@ resources:
             __default_login__: { get_param: image_default_login}
           template: |
             #!/bin/bash
+            
+            #-------------------------------------------
+            function wait_for_ssh()
+            {
+              HOST=$1
+              PORT=22
+
+              RESULT=1      # 0 upon success
+              TIMEOUT=30    # number of iterations (5 minutes?)
+              while :; do 
+                status=$(sudo -u "__default_login__" ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no $HOST -p $PORT echo ok 2>&1)
+                RESULT=$?
+                echo $status >> $LOGS
+                echo $RESULT >> $LOGS
+                if [ $RESULT -eq 0 ]; then
+                    echo "$HOST Connected ok" >> $LOGS
+                    break
+                fi
+                if [ $RESULT -eq 255 ]; then
+                    # connection refused also gets you here
+                    if [[ $status == *"Permission"* ]] ; then
+                        # permission denied indicates the ssh link is okay
+                        break
+                    fi
+                fi
+                TIMEOUT=$((TIMEOUT-1))
+                if [ $TIMEOUT -eq 0 ]; then
+                    echo "$HOST Timed out" >> $LOGS
+                    exit 1 
+                fi
+                sleep 10s
+              done
+            }
+            #-------------------------------------------
+
             DEFAULT_LOGIN_HOME=/home/"__default_login__"
             touch $DEFAULT_LOGIN_HOME/logs.txt
             LOGS=$DEFAULT_LOGIN_HOME/logs.txt
+
+            count="__count__"
 
             echo "__public_key__" >>$DEFAULT_LOGIN_HOME/.ssh/authorized_keys
             echo "__private_key__" >> $DEFAULT_LOGIN_HOME/.ssh/id_rsa
@@ -237,53 +290,25 @@ resources:
             rm ./group_vars/all/slurm.yml
             ls ./group_vars/all/ >> $LOGS
 
-            HOST_="__prefix__"
-            _HOST="-compute0"
-            HOST="$HOST_$_HOST"
-            PORT=22
-
-            RESULT=1      # 0 upon success
-            TIMEOUT=30    # number of iterations (5 minutes?)
-            while :; do 
-              status=$(sudo -u "__default_login__" ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no $HOST -p $PORT echo ok 2>&1)
-              RESULT=$?
-              echo $status >> $LOGS
-              echo $RESULT >> $LOGS
-              if [ $RESULT -eq 0 ]; then
-                  echo "Connected ok" >> $LOGS
-                  break
-              fi
-              if [ $RESULT -eq 255 ]; then
-                  # connection refused also gets you here
-                  if [[ $status == *"Permission"* ]] ; then
-                      # permission denied indicates the ssh link is okay
-                      break
-                  fi
-              fi
-              TIMEOUT=$((TIMEOUT-1))
-              if [ $TIMEOUT -eq 0 ]; then
-                  echo "Timed out" >> $LOGS
-                  exit 1 
-              fi
-              sleep 10s
-            done
-
-            sudo -u "__default_login__" scp -oStrictHostKeyChecking=no "__default_login__"@$HOST:$DEFAULT_LOGIN_HOME/var.yml ./group_vars/all/slurm.yml >> $LOGS
-            echo node_prefix: __prefix__ >> ./group_vars/all/slurm.yml
-            echo master_name: "__prefix__"-master >> ./group_vars/all/slurm.yml
-            echo node_max: "__count__" >> ./group_vars/all/slurm.yml
-
             cat <<EOF1 > hosts.ini
             [MASTER]
             __prefix__-master ansible_connection=local
 
             [NODES]
             EOF1
+
             node_prefix=$(printf "%s-compute" "__prefix__")
-            for i in $(eval echo {0.."__count__"})
+            for i in $(eval echo {0..$(echo "$count-1" | bc)})
             do
               node_name=$(printf "%s%d" $node_prefix $i)
               echo "$node_name" >> hosts.ini
+              wait_for_ssh $node_name
+              if [ $i -eq 0 ]; then
+                  sudo -u "__default_login__" scp -oStrictHostKeyChecking=no "__default_login__"@$node_name:$DEFAULT_LOGIN_HOME/var.yml ./group_vars/all/slurm.yml >> $LOGS
+                  echo node_prefix: __prefix__ >> ./group_vars/all/slurm.yml
+                  echo master_name: "__prefix__"-master >> ./group_vars/all/slurm.yml
+                  echo "node_max: $count" >> ./group_vars/all/slurm.yml
+              fi
             done
 
             export ANSIBLE_HOST_KEY_CHECKING=False
