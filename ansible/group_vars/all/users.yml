@@ -1,0 +1,4 @@
+users_list:
+  - { login: "user1" , key: "key1" }
+  - { login: "user2" , key: "key2" }
+  - {login: "", key: ""}

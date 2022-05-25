@@ -3,7 +3,14 @@ heat_template_version: 2013-05-23
 description: Template that installs a cluster of slurm servers.
 
 parameters:
-  count:
+  base_name:
+    type: string
+    description: Cluster base name (lowercase)
+    constraints:
+      - allowed_pattern: "[a-z0-9]*"
+    default: tap
+
+  node_count:
     description: Number of slurm nodes
     type: number
     default: 3
@@ -14,21 +21,21 @@ parameters:
     constraints:
       - custom_constraint: nova.keypair
 
-  flavor_master:
-    type: string
-    default: m1.small
-    description: |
-      Choose an instance flavor for master
-    constraints:
-      - custom_constraint: nova.flavor
+  #flavor_master:
+  #  type: string
+  #  default: c1.2xlarge
+  #  description: |
+  #    Choose an instance flavor for master
+  #  constraints:
+  #    - custom_constraint: nova.flavor
 
-  flavor_node:
-    type: string
-    default: m1.small
-    description: |
-      Choose an instance flavor for node
-    constraints:
-      - custom_constraint: nova.flavor
+  #flavor_node:
+  #  type: string
+  #  default: c1.2xlarge
+  #  description: |
+  #    Choose an instance flavor for node
+  #  constraints:
+  #    - custom_constraint: nova.flavor
   
   image_id:
     type: string
@@ -42,11 +49,6 @@ parameters:
     default: centos
     label: Image default login
   
-  #master_volume_size:
-  #  type: integer
-  #  default: 0
-  #  label: Master volume size
-  
   master_data_volume_size:
     type: number
     default: 400
@@ -57,17 +59,41 @@ parameters:
     constraints:
       - allowed_values: ["ceph-ssd", "standard"]
 
+  user1_name:
+    type: string
+    description: User1 account name
+    constraints:
+      - allowed_pattern: "[a-z]*"
+  
+  user1_key:
+    type: string
+    description: User1 ssh public key
+    constraints:
+      - custom_constraint: nova.keypair
+  
+  user2_name:
+    type: string
+    description: User2 account name
+    constraints:
+      - allowed_pattern: "[a-z]*"
+  
+  user2_key:
+    type: string
+    description: User2 ssh public key
+    constraints:
+      - custom_constraint: nova.keypair
+
 resources:
-  my_slurm_key:
+  triannot_key:
     properties:
-      name: my_slurm_key
+      name:
+        str_replace:
+          template:
+            $name-key-01
+          params:
+            $name: { get_param: base_name }
       save_private_key: true
     type: OS::Nova::KeyPair
-
-  #master_volume:
-  #  type: OS::Cinder::Volume
-  #    properties:
-  #      size: { get_param: master_volume_size }
   
   master_data_volume:
     type: OS::Cinder::Volume
@@ -75,54 +101,74 @@ resources:
       size: { get_param: master_data_volume_size }
       volume_type: { get_param: master_data_volume_type }
 
-  #node_volume:
-  #  type: OS::Cinder::Volume
-  #    properties:
-  #      size: { get_param: node_volume_size }
-
-  slurm_net:
+  triannot_net:
     type: OS::Neutron::Net
     properties:
-      name: triannot-network-public-01
+      name:
+        str_replace:
+          template:
+            $name-network-public-01
+          params:
+            $name: { get_param: base_name }
 
-  slurm_subnet:
+  triannot_subnet:
     type: OS::Neutron::Subnet
     properties:
-      name: triannot-subnet-public-01
-      network_id: { get_resource: slurm_net }
+      name:
+        str_replace:
+          template:
+            $name-subnet-public-01
+          params:
+            $name: { get_param: base_name }
+      network_id: { get_resource: triannot_net }
       cidr: 10.45.5.0/24
       gateway_ip: 10.45.5.1
       allocation_pools:
         - {end: 10.45.5.54,start: 10.45.5.2}
       enable_dhcp: true
 
-  slurm_router:
+  triannot_router:
     type: OS::Neutron::Router
     properties:
-      name: triannot-router-public-01
+      name:
+        str_replace:
+          template:
+            $name-router-public-01
+          params:
+            $name: { get_param: base_name }
       external_gateway_info:
         network: provider-public-uca1
         
-  slurm_router_interface:
+  triannot_router_interface:
     type: OS::Neutron::RouterInterface
     properties:
-      router_id: { get_resource: slurm_router }
-      subnet_id: { get_resource: slurm_subnet }
+      router_id: { get_resource: triannot_router }
+      subnet_id: { get_resource: triannot_subnet }
 
-  slurm_master_security_group:
+  triannot_master_security_group:
     type: OS::Neutron::SecurityGroup
     properties:
-      name: triannot-master-security-group-01
+      name:
+        str_replace:
+          template:
+            $name-master-security-group-01
+          params:
+            $name: { get_param: base_name }
       rules:
         - protocol: tcp
           remote_ip_prefix: 0.0.0.0/0
           port_range_min: 22
           port_range_max: 22
 
-  slurm_node_security_group:
+  triannot_node_security_group:
     type: OS::Neutron::SecurityGroup
     properties:
-      name: triannot-node-security-group-01
+      name:
+        str_replace:
+          template:
+            $name-node-security-group-01
+          params:
+            $name: { get_param: base_name }
       rules:
         - protocol: tcp
           remote_ip_prefix: 0.0.0.0/0
@@ -133,58 +179,60 @@ resources:
           port_range_min: 1
           port_range_max: 65535
   
-  slurm_master_port:
+  triannot_master_port:
     type: OS::Neutron::Port
     properties:
-      network_id: { get_resource: slurm_net }
+      network_id: { get_resource: triannot_net }
       security_groups:
         - default
-        - { get_resource: slurm_master_security_group }
+        - { get_resource: triannot_master_security_group }
   
-  slurm_node_port:
+  triannot_node_port:
     type: OS::Heat::ResourceGroup
     properties:
-      count:  {get_param: count}
+      count:  {get_param: node_count}
       resource_def:
         type: OS::Neutron::Port
         properties:
-          network_id: { get_resource: slurm_net }
+          network_id: { get_resource: triannot_net }
           security_groups:
             - default
-            - { get_resource: slurm_node_security_group }
+            - { get_resource: triannot_node_security_group }
           name:
             str_replace:
                   template:
-                    $name-$index
+                    $name$index$port
                   params:
-                    $name: slurm_node_port
+                    $name: triannot_node
                     $index: "%index%"
+                    $port: _port
   
-  slurm_cluster:
+  triannot_cluster:
     type: OS::Heat::ResourceGroup
-    depends_on: slurm_node_port
+    depends_on: triannot_node_port
     properties:
-      count: { get_param: count}
+      count: { get_param: node_count}
       resource_def:
         type: OS::Nova::Server
         properties:
           image: { get_param: image_id }
-          flavor: { get_param: flavor_node }
+          flavor: c1.2xlarge #{ get_param: flavor_node }
           key_name: { get_param: key_name }
           networks:
-            - port: #{ get_resource: slurm_node_port }
+            - port: #{ get_resource: triannot_node_port }
                 str_replace:
                   template:
-                    $name-$index
+                    $name$index$port
                   params:
-                    $name: slurm_node_port
+                    $name: triannot_node
                     $index: "%index%"
+                    $port: _port
           user_data_format: RAW
           user_data:
             str_replace:
               params:
-                __public_key__: { get_attr: [ my_slurm_key, public_key ]  }
-                __private_key__: { get_attr: [ my_slurm_key, private_key ] }
+                __public_key__: { get_attr: [ triannot_key, public_key ]  }
+                __private_key__: { get_attr: [ triannot_key, private_key ] }
                 __default_login__: { get_param: image_default_login}
               template: |
                 #!/bin/bash
@@ -205,28 +253,33 @@ resources:
               template:
                 $name-$index
               params:
-                $name: { get_param: "OS::stack_name" }
+                $name: { get_param: base_name }
                 $index: "compute%index%"
-
-  slurm_master:
+    
+  triannot_master:
     type: OS::Nova::Server
-    depends_on: slurm_cluster
-    depends_on: slurm_master_port
+    depends_on: triannot_cluster
+    depends_on: triannot_master_port
     properties:
       image: { get_param: image_id }
-      flavor: { get_param: flavor_master }
+      flavor: c1.2xlarge #{ get_param: flavor_master }
       key_name: { get_param: key_name }
       networks:
-        - port: { get_resource: slurm_master_port }
+        - port: { get_resource: triannot_master_port }
       user_data_format: RAW
       user_data:
         str_replace:
           params:
-            __private_key__: { get_attr: [ my_slurm_key, private_key ]  }
-            __public_key__: { get_attr: [ my_slurm_key,  public_key] }
-            __prefix__: { get_param: "OS::stack_name" }
-            __count__: {get_param: count}
+            __private_key__: { get_attr: [ triannot_key, private_key ]  }
+            __public_key__: { get_attr: [ triannot_key,  public_key] }
+            __prefix__: { get_param: base_name }
+            __count__: {get_param: node_count}
+            __test__ : {get_param: [test_parameter,1]}
             __default_login__: { get_param: image_default_login}
+            __user1_name__: { get_param: user1_name }
+            __user1_key__: { get_param: user1_key }
+            __user2_name__: { get_param: user2_name }
+            __user2_key__: { get_param: user2_key }
           template: |
             #!/bin/bash
             
@@ -280,15 +333,21 @@ resources:
               mkfs.xfs /dev/sdb >> $LOGS
             fi
 
+            echo "__test__" >> $LOGS
             echo "ansible git" >> $LOGS
             git clone https://github.com/balbes15/ansible-triannot.git
             echo "ansible git done" >> $LOGS
-            
+             
+
             cd ansible-triannot/ansible
             chown -R centos:centos $DEFAULT_LOGIN_HOME/ansible-triannot
             pwd >> $LOGS
             rm ./group_vars/all/slurm.yml
             ls ./group_vars/all/ >> $LOGS
+
+            echo "users_list:" >> ./group_vars/all/users.yml
+            echo '- { login: "__user1_name__", key: "__user1_key__" }' >> ./group_vars/all/users.yml
+            echo '- { login: "__user2_name__", key: "__user2_key__" }' >> ./group_vars/all/users.yml
 
             cat <<EOF1 > hosts.ini
             [MASTER]
@@ -298,16 +357,17 @@ resources:
             EOF1
 
             node_prefix=$(printf "%s-compute" "__prefix__")
-            for i in $(eval echo {0..$(echo "$count-1" | bc)})
+            count_1=$(($count-1))
+            for i in `seq 0 $count_1`
             do
               node_name=$(printf "%s%d" $node_prefix $i)
               echo "$node_name" >> hosts.ini
               wait_for_ssh $node_name
               if [ $i -eq 0 ]; then
                   sudo -u "__default_login__" scp -oStrictHostKeyChecking=no "__default_login__"@$node_name:$DEFAULT_LOGIN_HOME/var.yml ./group_vars/all/slurm.yml >> $LOGS
-                  echo node_prefix: __prefix__ >> ./group_vars/all/slurm.yml
+                  echo node_prefix: "__prefix__"-compute$i >> ./group_vars/all/slurm.yml
                   echo master_name: "__prefix__"-master >> ./group_vars/all/slurm.yml
-                  echo "node_max: $count" >> ./group_vars/all/slurm.yml
+                  echo "node_max: $count_1" >> ./group_vars/all/slurm.yml
               fi
             done
 
@@ -318,12 +378,12 @@ resources:
           template:
             $name-master
           params:
-            $name: { get_param: "OS::stack_name" }
+            $name: { get_param: base_name }
 
   volume_att:
     type: OS::Cinder::VolumeAttachment
     properties:
-      instance_uuid: { get_resource: slurm_master }
+      instance_uuid: { get_resource: triannot_master }
       volume_id: { get_resource: master_data_volume }
       mountpoint: /dev/sdb
 
@@ -334,12 +394,12 @@ resources:
   
   floating_ip_assoc:
     type: OS::Neutron::FloatingIPAssociation
-    depends_on: slurm_master
+    depends_on: triannot_master
     properties:
       floatingip_id: { get_resource: floating_ip }
-      port_id: { get_resource: slurm_master_port }
+      port_id: { get_resource: triannot_master_port }
   
 outputs:
     public_ip:
       description: The public IP address of this slurm cluster.
-      value: { get_attr: [slurm_master, addresses] }
+      value: { get_attr: [triannot_master, addresses] }
