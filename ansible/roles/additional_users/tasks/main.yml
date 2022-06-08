@@ -33,6 +33,8 @@
     create: yes
     line: "{{ item.key }}"
     state: present
+    owner: "{{ item.login }}"
+    group: "users"
     mode: "0600"
   when: item.login != ""
   with_items: "{{ users_list }}"

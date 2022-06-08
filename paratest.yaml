@@ -1,0 +1,179 @@
+heat_template_version: 2013-05-23
+
+description: Template that installs a cluster of slurm servers.
+
+parameters:    
+  key_name:
+    type: string
+    description: Name of key-pair to be used
+    constraints:
+      - custom_constraint: nova.keypair
+
+  image_id:
+    type: string
+    label: Server image
+    description: Choose centOS 7
+    default: f85e0272-8e27-43a4-be8c-9d9p7d067732 #centos-7-20220127
+    constraints:
+      - custom_constraint: glance.image
+      #- allowed_pattern: "[-a-zA-Z_0-9]*cent[oO][sS][-a-zA-Z_0-9]*"
+
+  image_default_login:
+    type: string
+    default: centos
+    label: Image default login
+  
+  master_data_volume_size:
+    type: number
+    default: 400
+    label: Master data volume size GB
+  
+  master_data_volume_type:
+    type: string
+    constraints:
+      - allowed_values: ["ceph-ssd", "standard"]
+  
+  test_parameter:
+    type: json
+    label: test param  list
+    description: test descr
+    default: 'test_param_1,test_param_2'
+
+resources:
+ 
+
+  triannot_key:
+    properties:
+      name:
+        str_replace:
+          template:
+            $name-key-01
+          params:
+            $name: { get_param: "OS::stack_name" }
+      save_private_key: true
+    type: OS::Nova::KeyPair
+  
+  master_data_volume:
+    type: OS::Cinder::Volume
+    properties:
+      size: { get_param: master_data_volume_size }
+      volume_type: { get_param: master_data_volume_type }
+
+  triannot_net:
+    type: OS::Neutron::Net
+    properties:
+      name:
+        str_replace:
+          template:
+            $name-network-public-01
+          params:
+            $name: { get_param: "OS::stack_name" }
+
+  triannot_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name:
+        str_replace:
+          template:
+            $name-subnet-public-01
+          params:
+            $name: { get_param: "OS::stack_name" }
+      network_id: { get_resource: triannot_net }
+      cidr: 10.45.5.0/24
+      gateway_ip: 10.45.5.1
+      allocation_pools:
+        - {end: 10.45.5.54,start: 10.45.5.2}
+      enable_dhcp: true
+
+  triannot_router:
+    type: OS::Neutron::Router
+    properties:
+      name:
+        str_replace:
+          template:
+            $name-router-public-01
+          params:
+            $name: { get_param: "OS::stack_name" }
+      external_gateway_info:
+        network: provider-public-uca1
+        
+  triannot_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: triannot_router }
+      subnet_id: { get_resource: triannot_subnet }
+  
+  triannot_master_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: triannot_net }
+      security_groups:
+        - default
+        - tap-master-security-group-01 
+
+  master_init:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        write_files:
+        - path: /tmp/users/yaml
+          content: "The one is bar"
+
+  triannot_master:
+    type: OS::Nova::Server
+    depends_on: triannot_master_port
+    properties:
+      image: { get_param: image_id }
+      flavor: c1.2xlarge #{ get_param: flavor_master }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: triannot_master_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          params:
+            __private_key__: { get_attr: [ triannot_key, private_key ]  }
+            __public_key__: { get_attr: [ triannot_key,  public_key] }
+            __prefix__: { get_param: "OS::stack_name" }
+            __test__ : {get_param: test_parameter}
+            __getkey__: { get_param: key_name } 
+            __default_login__: { get_param: image_default_login}
+          template: |
+            #!/bin/bash
+            
+            DEFAULT_LOGIN_HOME=/home/"__default_login__"
+            LOGS=$DEFAULT_LOGIN_HOME/logs.txt
+            touch $LOGS
+
+            echo "__getkey__" >> $LOGS
+            
+      name: 
+        str_replace:
+          template:
+            $name-master
+          params:
+            $name: { get_param: "OS::stack_name" }
+
+  volume_att:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      instance_uuid: { get_resource: triannot_master }
+      volume_id: { get_resource: master_data_volume }
+      mountpoint: /dev/sdb
+
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: provider-public-uca1
+  
+  floating_ip_assoc:
+    type: OS::Neutron::FloatingIPAssociation
+    depends_on: triannot_master
+    properties:
+      floatingip_id: { get_resource: floating_ip }
+      port_id: { get_resource: triannot_master_port }
+  
+outputs:
+    public_ip:
+      description: The public IP address of this slurm cluster.
+      value: { get_attr: [triannot_master, addresses] }
