@@ -14,10 +14,10 @@
     baseurl: http://mirror.dsi.uca.fr/infra/crri-el7-x86_64
     gpgcheck: no
 
- - name: upgrade all packages
-   yum:
-     name: '*'
-     state: latest
+- name: upgrade all packages
+  yum:
+    name: '*'
+    state: latest
 
 - name: Install packages
   package:
