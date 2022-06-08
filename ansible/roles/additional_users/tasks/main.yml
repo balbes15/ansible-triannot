@@ -4,6 +4,7 @@
     name: "{{ item.login }}"
     home: "/home/users/{{ item.login }}"
     group: "users"
+    owner: "{{ item.login }}"
     update_password: on_create
   when: item.login != ""
   with_items: "{{ users_list }}"
