@@ -4,7 +4,6 @@
     name: "{{ item.login }}"
     home: "/home/users/{{ item.login }}"
     group: "users"
-    owner: "{{ item.login }}"
     update_password: on_create
   when: item.login != ""
   with_items: "{{ users_list }}"
@@ -34,7 +33,6 @@
     create: yes
     line: "{{ item.key }}"
     state: present
-    owner: "{{ item.login }}"
     group: "users"
     mode: "0600"
   when: item.login != ""
@@ -57,6 +55,16 @@
   when: item.login != ""
   with_items: "{{ users_list }}"
 
+- name: Add authorized keys file to AuthorizedKeysFile
+  lineinfile: 
+    dest=/etc/ssh/sshd_config
+    backup=True
+    backrefs=True
+    state=present
+    regexp='^(AuthorizedKeysFile(?!.*\b{{ item.login }}\b).*)$'
+    line='\1 {{ item.login }}'
+  when: item.login != ""
+  with_items: "{{ users_list }}"
 ####
 
 # - name: Create additional users (phleroy)
