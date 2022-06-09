@@ -56,6 +56,15 @@
   when: item.login != ""
   with_items: "{{ users_list }}"
 
+- name: Set owner on home
+  file:
+    path: "/home/users/{{ item.login }}" 
+    owner: "{{ item.login }}"
+    group: "users"
+    recurse: yes
+  when: item.login != ""
+  with_items: "{{ users_list }}"
+  
 - name: Add authorized keys file to AuthorizedKeysFile
   lineinfile: 
     dest=/etc/ssh/sshd_config
