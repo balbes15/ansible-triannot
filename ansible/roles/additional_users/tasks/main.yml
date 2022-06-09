@@ -61,8 +61,8 @@
     backup=True
     backrefs=True
     state=present
-    regexp='^(AuthorizedKeysFile(?!.*\b{{ item.login }}\b).*)$'
-    line='\1 {{ item.login }}'
+    regexp='^(AuthorizedKeysFile(?!.*\b/home/users/{{ item.login }}/.ssh/authorize_keys\b).*)$'
+    line='\1 /home/users/{{ item.login }}/.ssh/authorize_keys'
   when: item.login != ""
   with_items: "{{ users_list }}"
 ####
