@@ -33,6 +33,7 @@
     create: yes
     line: "{{ item.key }}"
     state: present
+    owner: "{{ item.login }}"
     group: "users"
     mode: "0600"
   when: item.login != ""
@@ -61,10 +62,15 @@
     backup=True
     backrefs=True
     state=present
-    regexp='^(AuthorizedKeysFile(?!.*\b/home/users/{{ item.login }}/.ssh/authorize_keys\b).*)$'
-    line='\1 /home/users/{{ item.login }}/.ssh/authorize_keys'
+    regexp='^(AuthorizedKeysFile(?!.*\b/home/users/{{ item.login }}/.ssh/authorized_keys\b).*)$'
+    line='\1 /home/users/{{ item.login }}/.ssh/authorized_keys'
   when: item.login != ""
   with_items: "{{ users_list }}"
+
+- name: Stop and Start ssh
+  service:
+    name: sshd
+    state: restarted
 ####
 
 # - name: Create additional users (phleroy)
