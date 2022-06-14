@@ -27,6 +27,3 @@
     enabled: yes
     state: restarted
 
-- name: Disable SELinux
-  selinux:
-    state: disabled

@@ -1,8 +1,9 @@
 ---
-- name: Create additional users (phleroy)
+- name: Create additional users
   user:
     name: "{{ item.login }}"
     home: "/home/users/{{ item.login }}"
+    uid: "{{ item.uid }}"
     group: "users"
     update_password: on_create
   when: item.login != ""

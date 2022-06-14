@@ -63,6 +63,7 @@ parameters:
 
   user1_name:
     type: string
+    label: user1 name
     description: User1 account name
     default: ""
     constraints:
@@ -70,11 +71,13 @@ parameters:
   
   user1_key:
     type: string
+    label: user1 ssh key
     description: User1 ssh public key
     default: ""
 
   user2_name:
     type: string
+    label: user2 name
     description: User2 account name
     default: ""
     constraints:
@@ -82,10 +85,51 @@ parameters:
   
   user2_key:
     type: string
+    label: user2 ssh key
     description: User2 ssh public key
     default: ""
-    #constraints:
-    #  - custom_constraint: nova.keypair
+
+  user3_name:
+    type: string
+    label: user3 name
+    description: User3 account name
+    default: ""
+    constraints:
+      - allowed_pattern: "[a-z]*"
+  
+  user3_key:
+    type: string
+    label: user3 ssh key
+    description: User3 ssh public key
+    default: ""
+
+  user4_name:
+    type: string
+    label: user4 name
+    description: User4 account name
+    default: ""
+    constraints:
+      - allowed_pattern: "[a-z]*"
+  
+  user4_key:
+    type: string
+    label: user4 ssh key
+    description: User4 ssh public key
+    default: ""
+  
+  user5_name:
+    type: string
+    label: user5 name
+    description: User5 account name
+    default: ""
+    constraints:
+      - allowed_pattern: "[a-z]*"
+  
+  user5_key:
+    type: string
+    label: user5 ssh key
+    description: User5 ssh public key
+    default: ""
     
 
 resources:
@@ -254,6 +298,8 @@ resources:
                 __index__: "%index%"
               template: |
                 #!/bin/bash
+                setenforce permissive #disable selinux
+                
                 DEFAULT_LOGIN_HOME=/home/"__default_login__"
                 echo "__public_key__" >> /home/"__default_login__"/.ssh/authorized_keys
                 echo "__private_key__" >> /home/"__default_login__"/.ssh/id_rsa
@@ -321,8 +367,16 @@ resources:
             __user1_key__: { get_param: user1_key }
             __user2_name__: { get_param: user2_name }
             __user2_key__: { get_param: user2_key }
+            __user3_name__: { get_param: user3_name }
+            __user3_key__: { get_param: user3_key }
+            __user4_name__: { get_param: user4_name }
+            __user4_key__: { get_param: user4_key }
+            __user5_name__: { get_param: user5_name }
+            __user5_key__: { get_param: user5_key }
           template: |
             #!/bin/bash
+
+            setenforce permissive #disable selinux
             
             DEFAULT_LOGIN_HOME=/home/"__default_login__"
             touch $DEFAULT_LOGIN_HOME/logs.txt
@@ -333,7 +387,7 @@ resources:
             echo "__public_key__" >>$DEFAULT_LOGIN_HOME/.ssh/authorized_keys
             echo "__private_key__" >> $DEFAULT_LOGIN_HOME/.ssh/id_rsa
             chown "__default_login__":"__default_login__" $DEFAULT_LOGIN_HOME/.ssh/id_rsa
-            chmod 600 $DEFAULT_LOGIN_HOME/.ssh/id_rsa
+            chmod 0600 $DEFAULT_LOGIN_HOME/.ssh/id_rsa
             cd $DEFAULT_LOGIN_HOME
 
             if [ -b /dev/sdb ]; then
@@ -355,8 +409,11 @@ resources:
             echo "---" > ./group_vars/all/users.yml
             echo "" > ./group_vars/all/users.yml
             echo "users_list:" > ./group_vars/all/users.yml
-            echo '  - { login: "__user1_name__", key: "__user1_key__" }' >> ./group_vars/all/users.yml
-            echo '  - { login: "__user2_name__", key: "__user2_key__" }' >> ./group_vars/all/users.yml
+            echo '  - { login: "__user1_name__", key: "__user1_key__", uid: 5001 }' >> ./group_vars/all/users.yml
+            echo '  - { login: "__user2_name__", key: "__user2_key__", uid: 5002 }' >> ./group_vars/all/users.yml
+            echo '  - { login: "__user3_name__", key: "__user3_key__", uid: 5003 }' >> ./group_vars/all/users.yml
+            echo '  - { login: "__user4_name__", key: "__user4_key__", uid: 5004 }' >> ./group_vars/all/users.yml
+            echo '  - { login: "__user5_name__", key: "__user5_key__", uid: 5005 }' >> ./group_vars/all/users.yml
 
             cat <<EOF1 > hosts.ini
             [NODES:vars]
